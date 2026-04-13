@@ -1,0 +1,19 @@
+import React from 'react';
+import { View, Text, Button, StyleSheet } from 'react-native';
+
+export default function HomeScreen({ navigation }) {
+  return (
+    <View style={styles.container}>
+      <Text style={styles.title}>Vue des comptes à venir...</Text>
+      <Button 
+        title="Voir mes prévisions" 
+        onPress={() => navigation.navigate('Projections')} 
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  title: { fontSize: 20, fontWeight: 'bold', marginBottom: 20 }
+});
