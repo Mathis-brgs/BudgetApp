@@ -46,16 +46,17 @@ function getTodayString() {
 export default function ProjectionScreen() {
   const [loading, setLoading] = useState(true);
   const [chartData, setChartData] = useState(null);
-  const [upcomingExpenses, setUpcomingExpenses] = useState([]);
+  const [plannedItems, setPlannedItems] = useState([]);
   const [finalBalance, setFinalBalance] = useState(0);
   const [errorMsg, setErrorMsg] = useState('');
 
   // Modal
   const [modalVisible, setModalVisible] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [expenseName, setExpenseName] = useState('');
-  const [expenseAmount, setExpenseAmount] = useState('');
-  const [expenseDate, setExpenseDate] = useState('');
+  const [itemType, setItemType] = useState('depense');
+  const [itemName, setItemName] = useState('');
+  const [itemAmount, setItemAmount] = useState('');
+  const [itemDate, setItemDate] = useState('');
 
   useEffect(() => {
     calculateProjections();
@@ -82,17 +83,19 @@ export default function ProjectionScreen() {
       if (rulesError) throw rulesError;
 
       const today = new Date();
-      const { data: expenses, error: expError } = await supabase
+      const todayStr = today.toISOString().split('T')[0];
+
+      const { data: items, error: itemsError } = await supabase
         .from('planned_expenses')
         .select('*')
-        .gte('payment_date', today.toISOString().split('T')[0])
+        .gte('payment_date', todayStr)
         .order('payment_date', { ascending: true });
-      if (expError) throw expError;
+      if (itemsError) throw itemsError;
 
+      // Algorithme mois par mois
       const labels = [];
       const dataPoints = [];
       let runningBalance = initialBalance;
-
       const startYear = today.getFullYear();
       const startMonth = today.getMonth();
 
@@ -108,24 +111,28 @@ export default function ProjectionScreen() {
           continue;
         }
 
+        // Règles d'épargne actives
         if (rules) {
           for (const rule of rules) {
             const start = parseMonthKey(rule.start_date);
             const end = parseMonthKey(rule.end_date);
-            const startKey = getMonthKey(start.year, start.month);
-            const endKey = getMonthKey(end.year, end.month);
-            if (monthKey >= startKey && monthKey <= endKey) {
+            if (monthKey >= getMonthKey(start.year, start.month) &&
+                monthKey <= getMonthKey(end.year, end.month)) {
               runningBalance += Number(rule.monthly_amount);
             }
           }
         }
 
-        if (expenses) {
-          for (const expense of expenses) {
-            const exp = parseMonthKey(expense.payment_date);
-            const expKey = getMonthKey(exp.year, exp.month);
-            if (expKey === monthKey) {
-              runningBalance -= Number(expense.amount);
+        // Dépenses prévues et gains prévus ce mois
+        if (items) {
+          for (const item of items) {
+            const exp = parseMonthKey(item.payment_date);
+            if (getMonthKey(exp.year, exp.month) === monthKey) {
+              if (item.type === 'gain') {
+                runningBalance += Number(item.amount);
+              } else {
+                runningBalance -= Number(item.amount);
+              }
             }
           }
         }
@@ -134,7 +141,7 @@ export default function ProjectionScreen() {
         dataPoints.push(Math.round(runningBalance));
       }
 
-      setUpcomingExpenses(expenses || []);
+      setPlannedItems(items || []);
       setFinalBalance(runningBalance);
       setChartData({ labels, datasets: [{ data: dataPoints }] });
     } catch (error) {
@@ -146,25 +153,31 @@ export default function ProjectionScreen() {
   };
 
   const openModal = () => {
-    setExpenseName('');
-    setExpenseAmount('');
-    setExpenseDate('');
+    setItemType('depense');
+    setItemName('');
+    setItemAmount('');
+    setItemDate('');
     setModalVisible(true);
   };
 
   const closeModal = () => setModalVisible(false);
 
+  const handleTypeToggle = (type) => {
+    setItemType(type);
+    setItemName('');
+  };
+
   const handleSave = async () => {
-    const parsedAmount = parseFloat(expenseAmount.replace(',', '.'));
-    if (!expenseName.trim()) {
-      Alert.alert('Erreur', 'Saisis un nom pour cette dépense.');
+    const parsedAmount = parseFloat(itemAmount.replace(',', '.'));
+    if (!itemName.trim()) {
+      Alert.alert('Erreur', 'Saisis un nom.');
       return;
     }
-    if (!expenseAmount || isNaN(parsedAmount) || parsedAmount <= 0) {
-      Alert.alert('Erreur', 'Saisis un montant valide (ex: 850).');
+    if (!itemAmount || isNaN(parsedAmount) || parsedAmount <= 0) {
+      Alert.alert('Erreur', 'Saisis un montant valide.');
       return;
     }
-    if (!expenseDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    if (!itemDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
       Alert.alert('Erreur', 'La date doit être au format AAAA-MM-JJ.');
       return;
     }
@@ -174,58 +187,49 @@ export default function ProjectionScreen() {
       const { error } = await supabase
         .from('planned_expenses')
         .insert({
-          name: expenseName.trim(),
+          name: itemName.trim(),
           amount: parsedAmount,
-          payment_date: expenseDate,
+          payment_date: itemDate,
+          type: itemType,
         });
       if (error) throw error;
 
       closeModal();
       await calculateProjections();
     } catch (error) {
-      console.error('Erreur ajout dépense prévue:', error.message);
-      Alert.alert('Erreur', "Impossible d'ajouter la dépense prévue.");
+      console.error('Erreur ajout:', error.message);
+      Alert.alert('Erreur', "Impossible d'ajouter.");
     } finally {
       setSaving(false);
     }
   };
 
-  const handleLongPress = (expense) => {
+  const handleLongPress = (item) => {
+    const label = item.type === 'gain' ? 'gain prévu' : 'dépense prévue';
     Alert.alert(
-      expense.name,
-      `${Number(expense.amount).toLocaleString('fr-FR', { minimumFractionDigits: 2 })} € — ${formatDate(expense.payment_date)}`,
+      item.name,
+      `${Number(item.amount).toLocaleString('fr-FR', { minimumFractionDigits: 2 })} € — ${formatDate(item.payment_date)}`,
       [
         {
           text: 'Supprimer',
           style: 'destructive',
-          onPress: () => confirmDelete(expense),
+          onPress: () =>
+            Alert.alert(`Supprimer ce ${label} ?`, 'La courbe sera recalculée.', [
+              { text: 'Annuler', style: 'cancel' },
+              { text: 'Supprimer', style: 'destructive', onPress: () => handleDelete(item) },
+            ]),
         },
         { text: 'Annuler', style: 'cancel' },
       ]
     );
   };
 
-  const confirmDelete = (expense) => {
-    Alert.alert(
-      'Supprimer cette dépense prévue ?',
-      'La courbe sera recalculée.',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Supprimer',
-          style: 'destructive',
-          onPress: () => handleDelete(expense),
-        },
-      ]
-    );
-  };
-
-  const handleDelete = async (expense) => {
+  const handleDelete = async (item) => {
     try {
       const { error } = await supabase
         .from('planned_expenses')
         .delete()
-        .eq('id', expense.id);
+        .eq('id', item.id);
       if (error) throw error;
       await calculateProjections();
     } catch (error) {
@@ -234,7 +238,31 @@ export default function ProjectionScreen() {
     }
   };
 
+  const depenses = plannedItems.filter(i => i.type !== 'gain');
+  const gains = plannedItems.filter(i => i.type === 'gain');
   const screenWidth = Dimensions.get('window').width;
+
+  const renderItem = (item, index, arr) => (
+    <TouchableOpacity
+      key={item.id}
+      style={[styles.itemRow, index === arr.length - 1 && styles.itemRowLast]}
+      onLongPress={() => handleLongPress(item)}
+      delayLongPress={400}
+      activeOpacity={0.7}
+    >
+      <View style={[styles.itemIcon, item.type === 'gain' && styles.itemIconGain]}>
+        <Text style={styles.itemIconText}>{item.type === 'gain' ? '💰' : '📅'}</Text>
+      </View>
+      <View style={styles.itemInfo}>
+        <Text style={styles.itemName}>{item.name}</Text>
+        <Text style={styles.itemDate}>{formatDate(item.payment_date)}</Text>
+      </View>
+      <Text style={[styles.itemAmount, item.type === 'gain' && styles.itemAmountGain]}>
+        {item.type === 'gain' ? '+' : '-'}
+        {Number(item.amount).toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €
+      </Text>
+    </TouchableOpacity>
+  );
 
   return (
     <View style={styles.container}>
@@ -274,60 +302,38 @@ export default function ProjectionScreen() {
               <Text style={styles.summaryLabel}>
                 Épargne projetée dans {PROJECTION_MONTHS} mois
               </Text>
-              <Text
-                style={[
-                  styles.summaryAmount,
-                  finalBalance < 0 && styles.summaryAmountNegative,
-                ]}
-              >
+              <Text style={[styles.summaryAmount, finalBalance < 0 && styles.summaryAmountNegative]}>
                 {Math.round(finalBalance).toLocaleString('fr-FR')} €
               </Text>
             </View>
 
-            {/* Section dépenses prévues */}
+            {/* Dépenses prévues */}
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Dépenses prévues</Text>
               <Text style={styles.sectionHint}>Appui long pour supprimer</Text>
             </View>
-
-            {upcomingExpenses.length === 0 ? (
+            {depenses.length === 0 ? (
               <View style={styles.emptyBox}>
                 <Text style={styles.emptyText}>Aucune dépense prévue.</Text>
-                <Text style={styles.emptyHint}>
-                  Appuie sur + pour en ajouter une.
-                </Text>
               </View>
             ) : (
-              <View style={styles.expensesList}>
-                {upcomingExpenses.map((exp, index) => (
-                  <TouchableOpacity
-                    key={exp.id}
-                    style={[
-                      styles.expenseRow,
-                      index === upcomingExpenses.length - 1 &&
-                        styles.expenseRowLast,
-                    ]}
-                    onLongPress={() => handleLongPress(exp)}
-                    delayLongPress={400}
-                    activeOpacity={0.7}
-                  >
-                    <View style={styles.expenseIcon}>
-                      <Text style={styles.expenseIconText}>📅</Text>
-                    </View>
-                    <View style={styles.expenseInfo}>
-                      <Text style={styles.expenseName}>{exp.name}</Text>
-                      <Text style={styles.expenseDate}>
-                        {formatDate(exp.payment_date)}
-                      </Text>
-                    </View>
-                    <Text style={styles.expenseAmount}>
-                      -{Number(exp.amount).toLocaleString('fr-FR', {
-                        minimumFractionDigits: 2,
-                      })}{' '}
-                      €
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+              <View style={styles.itemsList}>
+                {depenses.map((item, i) => renderItem(item, i, depenses))}
+              </View>
+            )}
+
+            {/* Gains prévus */}
+            <View style={[styles.sectionHeader, { marginTop: 24 }]}>
+              <Text style={styles.sectionTitle}>Gains prévus</Text>
+              <Text style={styles.sectionHint}>Appui long pour supprimer</Text>
+            </View>
+            {gains.length === 0 ? (
+              <View style={styles.emptyBox}>
+                <Text style={styles.emptyText}>Aucun gain prévu.</Text>
+              </View>
+            ) : (
+              <View style={styles.itemsList}>
+                {gains.map((item, i) => renderItem(item, i, gains))}
               </View>
             )}
           </>
@@ -339,7 +345,7 @@ export default function ProjectionScreen() {
         <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>
 
-      {/* Modal ajout dépense prévue */}
+      {/* Modal */}
       <Modal
         visible={modalVisible}
         animationType="slide"
@@ -352,19 +358,39 @@ export default function ProjectionScreen() {
         >
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Dépense prévue</Text>
+              <Text style={styles.modalTitle}>Nouveau mouvement prévu</Text>
               <TouchableOpacity onPress={closeModal} style={styles.closeButton}>
                 <Text style={styles.closeButtonText}>✕</Text>
               </TouchableOpacity>
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Toggle Dépense / Gain */}
+              <View style={styles.typeToggle}>
+                <TouchableOpacity
+                  style={[styles.typeButton, itemType === 'depense' && styles.typeButtonDepenseActive]}
+                  onPress={() => handleTypeToggle('depense')}
+                >
+                  <Text style={[styles.typeButtonText, itemType === 'depense' && styles.typeButtonTextActive]}>
+                    📅 Dépense
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.typeButton, itemType === 'gain' && styles.typeButtonGainActive]}
+                  onPress={() => handleTypeToggle('gain')}
+                >
+                  <Text style={[styles.typeButtonText, itemType === 'gain' && styles.typeButtonTextActive]}>
+                    💰 Gain
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
               <Text style={styles.fieldLabel}>Nom *</Text>
               <TextInput
                 style={styles.input}
-                placeholder="Ex: Billets d'avion"
-                value={expenseName}
-                onChangeText={setExpenseName}
+                placeholder={itemType === 'gain' ? "Ex: Prime annuelle" : "Ex: Billets d'avion"}
+                value={itemName}
+                onChangeText={setItemName}
                 autoFocus
                 maxLength={60}
               />
@@ -374,24 +400,26 @@ export default function ProjectionScreen() {
                 style={styles.input}
                 placeholder="Ex: 850"
                 keyboardType="decimal-pad"
-                value={expenseAmount}
-                onChangeText={setExpenseAmount}
+                value={itemAmount}
+                onChangeText={setItemAmount}
               />
 
               <Text style={styles.fieldLabel}>Date prévue *</Text>
               <TextInput
                 style={styles.input}
                 placeholder="AAAA-MM-JJ"
-                value={expenseDate}
-                onChangeText={setExpenseDate}
+                value={itemDate}
+                onChangeText={setItemDate}
                 keyboardType="numbers-and-punctuation"
               />
-              <Text style={styles.fieldHint}>
-                Ex : {getTodayString()} — la dépense sera déduite de la courbe le mois correspondant.
-              </Text>
+              <Text style={styles.fieldHint}>Ex : {getTodayString()}</Text>
 
               <TouchableOpacity
-                style={[styles.saveButton, saving && styles.saveButtonDisabled]}
+                style={[
+                  styles.saveButton,
+                  itemType === 'gain' && styles.saveButtonGain,
+                  saving && styles.saveButtonDisabled,
+                ]}
                 onPress={handleSave}
                 disabled={saving}
               >
@@ -410,37 +438,13 @@ export default function ProjectionScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F2F2F7',
-  },
-  scrollContent: {
-    padding: 15,
-    paddingBottom: 100,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#1C1C1E',
-    marginBottom: 4,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#8E8E93',
-    marginBottom: 20,
-  },
-  loader: {
-    marginTop: 60,
-  },
-  errorText: {
-    color: '#FF3B30',
-    textAlign: 'center',
-    marginTop: 40,
-  },
-  chartWrapper: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
+  container: { flex: 1, backgroundColor: '#F2F2F7' },
+  scrollContent: { padding: 15, paddingBottom: 100 },
+  title: { fontSize: 22, fontWeight: 'bold', color: '#1C1C1E', marginBottom: 4 },
+  subtitle: { fontSize: 14, color: '#8E8E93', marginBottom: 20 },
+  loader: { marginTop: 60 },
+  errorText: { color: '#FF3B30', textAlign: 'center', marginTop: 40 },
+  chartWrapper: { alignItems: 'center', marginBottom: 20 },
   chart: {
     borderRadius: 16,
     shadowColor: '#000',
@@ -461,49 +465,20 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
-  summaryLabel: {
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.8)',
-    marginBottom: 6,
-  },
-  summaryAmount: {
-    fontSize: 36,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  summaryAmountNegative: {
-    color: '#FFD60A',
-  },
+  summaryLabel: { fontSize: 13, color: 'rgba(255,255,255,0.8)', marginBottom: 6 },
+  summaryAmount: { fontSize: 36, fontWeight: 'bold', color: '#fff' },
+  summaryAmountNegative: { color: '#FFD60A' },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'baseline',
     marginBottom: 10,
   },
-  sectionTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#1C1C1E',
-  },
-  sectionHint: {
-    fontSize: 12,
-    color: '#C7C7CC',
-  },
-  emptyBox: {
-    alignItems: 'center',
-    paddingVertical: 30,
-  },
-  emptyText: {
-    fontSize: 15,
-    color: '#3A3A3C',
-    fontWeight: '500',
-  },
-  emptyHint: {
-    fontSize: 13,
-    color: '#8E8E93',
-    marginTop: 4,
-  },
-  expensesList: {
+  sectionTitle: { fontSize: 17, fontWeight: '700', color: '#1C1C1E' },
+  sectionHint: { fontSize: 12, color: '#C7C7CC' },
+  emptyBox: { paddingVertical: 20, alignItems: 'center' },
+  emptyText: { fontSize: 14, color: '#8E8E93' },
+  itemsList: {
     backgroundColor: '#fff',
     borderRadius: 12,
     overflow: 'hidden',
@@ -513,17 +488,15 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 2,
   },
-  expenseRow: {
+  itemRow: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#F2F2F7',
   },
-  expenseRowLast: {
-    borderBottomWidth: 0,
-  },
-  expenseIcon: {
+  itemRowLast: { borderBottomWidth: 0 },
+  itemIcon: {
     width: 40,
     height: 40,
     borderRadius: 20,
@@ -532,27 +505,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: 12,
   },
-  expenseIconText: {
-    fontSize: 18,
-  },
-  expenseInfo: {
-    flex: 1,
-  },
-  expenseName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#1C1C1E',
-  },
-  expenseDate: {
-    fontSize: 13,
-    color: '#8E8E93',
-    marginTop: 2,
-  },
-  expenseAmount: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#FF3B30',
-  },
+  itemIconGain: { backgroundColor: '#F0FFF4' },
+  itemIconText: { fontSize: 18 },
+  itemInfo: { flex: 1 },
+  itemName: { fontSize: 15, fontWeight: '600', color: '#1C1C1E' },
+  itemDate: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
+  itemAmount: { fontSize: 16, fontWeight: '700', color: '#FF3B30' },
+  itemAmountGain: { color: '#34C759' },
   // FAB
   fab: {
     position: 'absolute',
@@ -561,27 +520,18 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#FF3B30',
+    backgroundColor: '#007AFF',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#FF3B30',
+    shadowColor: '#007AFF',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.4,
     shadowRadius: 6,
     elevation: 6,
   },
-  fabText: {
-    color: '#fff',
-    fontSize: 32,
-    lineHeight: 36,
-    fontWeight: '300',
-  },
+  fabText: { color: '#fff', fontSize: 32, lineHeight: 36, fontWeight: '300' },
   // Modal
-  modalOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
+  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
   modalContainer: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 24,
@@ -595,37 +545,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 20,
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#1C1C1E',
-  },
-  closeButton: {
-    padding: 4,
-  },
-  closeButtonText: {
-    fontSize: 18,
-    color: '#8E8E93',
-  },
-  fieldLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#3A3A3C',
-    marginBottom: 8,
-    marginTop: 16,
-  },
-  fieldHint: {
-    fontSize: 12,
-    color: '#8E8E93',
-    marginTop: 6,
-  },
-  input: {
+  modalTitle: { fontSize: 20, fontWeight: '700', color: '#1C1C1E' },
+  closeButton: { padding: 4 },
+  closeButtonText: { fontSize: 18, color: '#8E8E93' },
+  typeToggle: {
+    flexDirection: 'row',
     backgroundColor: '#F2F2F7',
-    borderRadius: 10,
-    padding: 14,
-    fontSize: 16,
-    color: '#1C1C1E',
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 4,
   },
+  typeButton: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
+  typeButtonDepenseActive: { backgroundColor: '#FF3B30' },
+  typeButtonGainActive: { backgroundColor: '#34C759' },
+  typeButtonText: { fontSize: 14, fontWeight: '600', color: '#8E8E93' },
+  typeButtonTextActive: { color: '#fff' },
+  fieldLabel: { fontSize: 14, fontWeight: '600', color: '#3A3A3C', marginBottom: 8, marginTop: 16 },
+  fieldHint: { fontSize: 12, color: '#8E8E93', marginTop: 6 },
+  input: { backgroundColor: '#F2F2F7', borderRadius: 10, padding: 14, fontSize: 16, color: '#1C1C1E' },
   saveButton: {
     backgroundColor: '#FF3B30',
     borderRadius: 12,
@@ -634,12 +571,7 @@ const styles = StyleSheet.create({
     marginTop: 28,
     marginBottom: 10,
   },
-  saveButtonDisabled: {
-    opacity: 0.6,
-  },
-  saveButtonText: {
-    color: '#fff',
-    fontSize: 17,
-    fontWeight: '700',
-  },
+  saveButtonGain: { backgroundColor: '#34C759' },
+  saveButtonDisabled: { opacity: 0.6 },
+  saveButtonText: { color: '#fff', fontSize: 17, fontWeight: '700' },
 });
