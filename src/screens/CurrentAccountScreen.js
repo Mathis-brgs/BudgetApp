@@ -17,7 +17,7 @@ export default function HomeScreen({ navigation }) {
       const { data, error } = await supabase
         .from('accounts')
         .select('*')
-        .order('type', { ascending: true }); 
+        .eq('type', 'courant');
 
       if (error) {
         throw error;
