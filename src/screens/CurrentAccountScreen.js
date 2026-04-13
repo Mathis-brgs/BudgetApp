@@ -14,7 +14,7 @@ import {
 } from "react-native";
 import { supabase } from "../services/supabase";
 
-const CATEGORIES = [
+const DEPENSE_CATEGORIES = [
   "Alimentation",
   "Transport",
   "Logement",
@@ -22,6 +22,15 @@ const CATEGORIES = [
   "Loisirs",
   "Vêtements",
   "Abonnements",
+  "Autre",
+];
+
+const REVENU_CATEGORIES = [
+  "Salaire",
+  "Freelance",
+  "Remboursement",
+  "Allocation",
+  "Virement",
   "Autre",
 ];
 
@@ -33,6 +42,11 @@ const CATEGORY_ICONS = {
   Loisirs: "🎬",
   Vêtements: "👕",
   Abonnements: "📱",
+  Salaire: "💼",
+  Freelance: "💻",
+  Remboursement: "↩️",
+  Allocation: "🏦",
+  Virement: "💸",
   Autre: "📦",
 };
 
@@ -60,6 +74,7 @@ export default function CurrentAccountScreen() {
   const [saving, setSaving] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState(null);
 
+  const [transactionType, setTransactionType] = useState("depense");
   const [amount, setAmount] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
   const [description, setDescription] = useState("");
@@ -107,12 +122,14 @@ export default function CurrentAccountScreen() {
   const openModal = (transaction = null) => {
     if (transaction) {
       setEditingTransaction(transaction);
+      setTransactionType(transaction.type || "depense");
       setAmount(transaction.amount != null ? String(transaction.amount) : "");
       setSelectedCategory(transaction.category);
       setDescription(transaction.description || "");
       setDate(transaction.date);
     } else {
       setEditingTransaction(null);
+      setTransactionType("depense");
       setAmount("");
       setSelectedCategory("");
       setDescription("");
@@ -126,7 +143,13 @@ export default function CurrentAccountScreen() {
     setEditingTransaction(null);
   };
 
+  const handleTypeToggle = (type) => {
+    setTransactionType(type);
+    setSelectedCategory(""); 
+  };
+
   const handleLongPress = (transaction) => {
+    const label = transaction.type === "revenu" ? "revenu" : "dépense";
     Alert.alert(
       transaction.category,
       `${Number(transaction.amount).toLocaleString("fr-FR", { minimumFractionDigits: 2 })} € — ${formatDate(transaction.date)}`,
@@ -135,16 +158,16 @@ export default function CurrentAccountScreen() {
         {
           text: "Supprimer",
           style: "destructive",
-          onPress: () => confirmDelete(transaction),
+          onPress: () => confirmDelete(transaction, label),
         },
         { text: "Annuler", style: "cancel" },
       ]
     );
   };
 
-  const confirmDelete = (transaction) => {
+  const confirmDelete = (transaction, label) => {
     Alert.alert(
-      "Supprimer cette dépense ?",
+      `Supprimer ce ${label} ?`,
       "Le solde du compte sera remis à jour.",
       [
         { text: "Annuler", style: "cancel" },
@@ -166,8 +189,12 @@ export default function CurrentAccountScreen() {
         .eq("id", transaction.id);
       if (deleteError) throw deleteError;
 
-      // Remettre le montant dans le solde
-      const newBalance = Number(account.balance) + Number(transaction.amount);
+      // Inverser l'effet sur le solde selon le type
+      const isRevenu = transaction.type === "revenu";
+      const newBalance = isRevenu
+        ? Number(account.balance) - Number(transaction.amount)
+        : Number(account.balance) + Number(transaction.amount);
+
       const { error: updateError } = await supabase
         .from("accounts")
         .update({ balance: newBalance })
@@ -177,7 +204,7 @@ export default function CurrentAccountScreen() {
       await Promise.all([fetchAccounts(), fetchTransactions()]);
     } catch (error) {
       console.error("Erreur suppression:", error.message);
-      Alert.alert("Erreur", "Impossible de supprimer la dépense.");
+      Alert.alert("Erreur", "Impossible de supprimer.");
     }
   };
 
@@ -206,10 +233,11 @@ export default function CurrentAccountScreen() {
       setSaving(true);
 
       if (editingTransaction) {
-        // update la transaction
+        // MODIFICATION
         const { error: updateTxError } = await supabase
           .from("transactions")
           .update({
+            type: transactionType,
             amount: parsedAmount,
             category: selectedCategory,
             description: description.trim() || null,
@@ -218,20 +246,27 @@ export default function CurrentAccountScreen() {
           .eq("id", editingTransaction.id);
         if (updateTxError) throw updateTxError;
 
-        // Remettre l'ancien montant, déduire le nouveau
-        const balanceDiff = Number(editingTransaction.amount) - parsedAmount;
-        const newBalance = Number(account.balance) + balanceDiff;
+        // Annuler l'effet de l'ancienne transaction, appliquer la nouvelle
+        const oldAmount = Number(editingTransaction.amount);
+        const oldIsRevenu = editingTransaction.type === "revenu";
+        const newIsRevenu = transactionType === "revenu";
+
+        const undoOld = oldIsRevenu ? -oldAmount : +oldAmount;
+        const applyNew = newIsRevenu ? +parsedAmount : -parsedAmount;
+        const newBalance = Number(account.balance) + undoOld + applyNew;
+
         const { error: updateBalError } = await supabase
           .from("accounts")
           .update({ balance: newBalance })
           .eq("id", account.id);
         if (updateBalError) throw updateBalError;
       } else {
-        // Insérer la transaction
+        // CRÉATION
         const { error: insertError } = await supabase
           .from("transactions")
           .insert({
             account_id: account.id,
+            type: transactionType,
             amount: parsedAmount,
             category: selectedCategory,
             description: description.trim() || null,
@@ -239,7 +274,11 @@ export default function CurrentAccountScreen() {
           });
         if (insertError) throw insertError;
 
-        const newBalance = Number(account.balance) - parsedAmount;
+        const isRevenu = transactionType === "revenu";
+        const newBalance = isRevenu
+          ? Number(account.balance) + parsedAmount
+          : Number(account.balance) - parsedAmount;
+
         const { error: updateError } = await supabase
           .from("accounts")
           .update({ balance: newBalance })
@@ -251,11 +290,14 @@ export default function CurrentAccountScreen() {
       closeModal();
     } catch (error) {
       console.error("Erreur sauvegarde:", error.message);
-      Alert.alert("Erreur", "Impossible d'enregistrer la dépense.");
+      Alert.alert("Erreur", "Impossible d'enregistrer.");
     } finally {
       setSaving(false);
     }
   };
+
+  const currentCategories =
+    transactionType === "revenu" ? REVENU_CATEGORIES : DEPENSE_CATEGORIES;
 
   return (
     <View style={styles.container}>
@@ -290,9 +332,9 @@ export default function CurrentAccountScreen() {
             </View>
           ))}
 
-          {/* Section dépenses récentes */}
+          {/* Section mouvements récents */}
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Dépenses récentes</Text>
+            <Text style={styles.sectionTitle}>Mouvements récents</Text>
             <Text style={styles.sectionSubtitle}>
               {transactions.length} opération
               {transactions.length !== 1 ? "s" : ""}
@@ -302,58 +344,72 @@ export default function CurrentAccountScreen() {
           {transactions.length === 0 ? (
             <View style={styles.emptyTransactions}>
               <Text style={styles.emptyIcon}>💸</Text>
-              <Text style={styles.emptyState}>Aucune dépense enregistrée.</Text>
+              <Text style={styles.emptyState}>Aucun mouvement enregistré.</Text>
               <Text style={styles.emptyHint}>
-                Appuie sur + pour ajouter ta première dépense.
+                Appuie sur + pour ajouter une dépense ou un revenu.
               </Text>
             </View>
           ) : (
             <View style={styles.transactionsList}>
-              {transactions.map((item, index) => (
-                <TouchableOpacity
-                  key={item.id}
-                  style={[
-                    styles.transactionRow,
-                    index === transactions.length - 1 &&
-                      styles.transactionRowLast,
-                  ]}
-                  onLongPress={() => handleLongPress(item)}
-                  delayLongPress={400}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.transactionIcon}>
-                    <Text style={styles.transactionIconText}>
-                      {CATEGORY_ICONS[item.category] || "📦"}
-                    </Text>
-                  </View>
-                  <View style={styles.transactionInfo}>
-                    <Text style={styles.transactionCategory}>
-                      {item.category}
-                    </Text>
-                    <Text style={styles.transactionDescription}>
-                      {item.description || formatDate(item.date)}
-                    </Text>
-                    {item.description ? (
-                      <Text style={styles.transactionDate}>
-                        {formatDate(item.date)}
+              {transactions.map((item, index) => {
+                const isRevenu = item.type === "revenu";
+                return (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={[
+                      styles.transactionRow,
+                      index === transactions.length - 1 &&
+                        styles.transactionRowLast,
+                    ]}
+                    onLongPress={() => handleLongPress(item)}
+                    delayLongPress={400}
+                    activeOpacity={0.7}
+                  >
+                    <View
+                      style={[
+                        styles.transactionIcon,
+                        isRevenu && styles.transactionIconRevenu,
+                      ]}
+                    >
+                      <Text style={styles.transactionIconText}>
+                        {CATEGORY_ICONS[item.category] || "📦"}
                       </Text>
-                    ) : null}
-                  </View>
-                  <Text style={styles.transactionAmount}>
-                    -{Number(item.amount).toLocaleString("fr-FR", {
-                      minimumFractionDigits: 2,
-                    })}{" "}
-                    €
-                  </Text>
-                </TouchableOpacity>
-              ))}
+                    </View>
+                    <View style={styles.transactionInfo}>
+                      <Text style={styles.transactionCategory}>
+                        {item.category}
+                      </Text>
+                      <Text style={styles.transactionDescription}>
+                        {item.description || formatDate(item.date)}
+                      </Text>
+                      {item.description ? (
+                        <Text style={styles.transactionDate}>
+                          {formatDate(item.date)}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <Text
+                      style={[
+                        styles.transactionAmount,
+                        isRevenu && styles.transactionAmountRevenu,
+                      ]}
+                    >
+                      {isRevenu ? "+" : "-"}
+                      {Number(item.amount).toLocaleString("fr-FR", {
+                        minimumFractionDigits: 2,
+                      })}{" "}
+                      €
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           )}
         </ScrollView>
       )}
 
       {/* Bouton FAB "+" */}
-      <TouchableOpacity style={styles.fab} onPress={openModal}>
+      <TouchableOpacity style={styles.fab} onPress={() => openModal()}>
         <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>
 
@@ -371,7 +427,7 @@ export default function CurrentAccountScreen() {
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
-                {editingTransaction ? "Modifier la dépense" : "Nouvelle dépense"}
+                {editingTransaction ? "Modifier" : "Nouveau mouvement"}
               </Text>
               <TouchableOpacity onPress={closeModal} style={styles.closeButton}>
                 <Text style={styles.closeButtonText}>✕</Text>
@@ -379,6 +435,42 @@ export default function CurrentAccountScreen() {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Toggle Dépense / Revenu */}
+              <View style={styles.typeToggle}>
+                <TouchableOpacity
+                  style={[
+                    styles.typeButton,
+                    transactionType === "depense" && styles.typeButtonDepenseActive,
+                  ]}
+                  onPress={() => handleTypeToggle("depense")}
+                >
+                  <Text
+                    style={[
+                      styles.typeButtonText,
+                      transactionType === "depense" && styles.typeButtonTextActive,
+                    ]}
+                  >
+                    💸 Dépense
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.typeButton,
+                    transactionType === "revenu" && styles.typeButtonRevenuActive,
+                  ]}
+                  onPress={() => handleTypeToggle("revenu")}
+                >
+                  <Text
+                    style={[
+                      styles.typeButtonText,
+                      transactionType === "revenu" && styles.typeButtonTextActive,
+                    ]}
+                  >
+                    💰 Revenu
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
               <Text style={styles.fieldLabel}>Montant (€) *</Text>
               <TextInput
                 style={styles.input}
@@ -391,7 +483,7 @@ export default function CurrentAccountScreen() {
 
               <Text style={styles.fieldLabel}>Catégorie *</Text>
               <View style={styles.categoryGrid}>
-                {CATEGORIES.map((cat) => (
+                {currentCategories.map((cat) => (
                   <TouchableOpacity
                     key={cat}
                     style={[
@@ -419,7 +511,11 @@ export default function CurrentAccountScreen() {
               <Text style={styles.fieldLabel}>Description (optionnel)</Text>
               <TextInput
                 style={styles.input}
-                placeholder="Ex: Courses Monoprix"
+                placeholder={
+                  transactionType === "revenu"
+                    ? "Ex: Salaire mars"
+                    : "Ex: Courses Monoprix"
+                }
                 value={description}
                 onChangeText={setDescription}
                 maxLength={100}
@@ -435,7 +531,11 @@ export default function CurrentAccountScreen() {
               />
 
               <TouchableOpacity
-                style={[styles.saveButton, saving && styles.saveButtonDisabled]}
+                style={[
+                  styles.saveButton,
+                  transactionType === "revenu" && styles.saveButtonRevenu,
+                  saving && styles.saveButtonDisabled,
+                ]}
                 onPress={handleSave}
                 disabled={saving}
               >
@@ -545,10 +645,13 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "#F2F2F7",
+    backgroundColor: "#FFF0F0",
     justifyContent: "center",
     alignItems: "center",
     marginRight: 12,
+  },
+  transactionIconRevenu: {
+    backgroundColor: "#F0FFF4",
   },
   transactionIconText: {
     fontSize: 18,
@@ -575,6 +678,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
     color: "#FF3B30",
+  },
+  transactionAmountRevenu: {
+    color: "#34C759",
   },
   emptyTransactions: {
     alignItems: "center",
@@ -646,6 +752,34 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: "#8E8E93",
   },
+  // Toggle dépense / revenu
+  typeToggle: {
+    flexDirection: "row",
+    backgroundColor: "#F2F2F7",
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 4,
+  },
+  typeButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+  typeButtonDepenseActive: {
+    backgroundColor: "#FF3B30",
+  },
+  typeButtonRevenuActive: {
+    backgroundColor: "#34C759",
+  },
+  typeButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#8E8E93",
+  },
+  typeButtonTextActive: {
+    color: "#fff",
+  },
   fieldLabel: {
     fontSize: 14,
     fontWeight: "600",
@@ -698,6 +832,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 28,
     marginBottom: 10,
+  },
+  saveButtonRevenu: {
+    backgroundColor: "#34C759",
   },
   saveButtonDisabled: {
     opacity: 0.6,
