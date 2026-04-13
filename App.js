@@ -1,27 +1,33 @@
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
-import HomeScreen from './src/screens/HomeScreen';
+import CurrentAccountScreen from './src/screens/CurrentAccountScreen';
+import SavingsScreen from './src/screens/SavingsScreen';
 import ProjectionScreen from './src/screens/ProjectionScreen';
 
-const Stack = createNativeStackNavigator();
+const Tab = createBottomTabNavigator();
 
 export default function App() {
   return (
     <NavigationContainer>
-      <Stack.Navigator initialRouteName="Home">
-        <Stack.Screen 
-          name="Home" 
-          component={HomeScreen} 
-          options={{ title: 'Mes Comptes' }} 
+      <Tab.Navigator screenOptions={{ tabBarActiveTintColor: '#007AFF' }}>
+        <Tab.Screen 
+          name="Courant" 
+          component={CurrentAccountScreen} 
+          options={{ title: 'Compte Courant' }} 
         />
-        <Stack.Screen 
-          name="Projections" 
+        <Tab.Screen 
+          name="Épargne" 
+          component={SavingsScreen} 
+          options={{ title: 'Épargne' }} 
+        />
+        <Tab.Screen 
+          name="Prévisions" 
           component={ProjectionScreen} 
-          options={{ title: 'Épargne Prévisionnelle' }} 
+          options={{ title: 'Simulateur' }} 
         />
-      </Stack.Navigator>
+      </Tab.Navigator>
     </NavigationContainer>
   );
 }
